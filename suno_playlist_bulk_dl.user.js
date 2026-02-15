@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         Suno：プレイリスト一括ダウンロード（MP3）
 // @namespace    http://tampermonkey.net/
-// @version      1.4.1
+// @version      1.4.2
 // @description  プレイリスト画面でMP3を一括DL。ファイル名は曲名（重複は(2)(3)…）。完了後、YouTube用タイムスタンプリスト(txt)＋Repeat開始時間を出力。UIはドラッグ移動可（位置保存）。
+// @updateURL    https://raw.githubusercontent.com/monmonx2-cmd/Tampermonkey/main/suno_playlist_bulk_dl.user.js
+// @downloadURL  https://raw.githubusercontent.com/monmonx2-cmd/Tampermonkey/main/suno_playlist_bulk_dl.user.js
 // @match        *://suno.com/*
 // @match        *://*.suno.com/*
 // @match        *://suno.ai/*
