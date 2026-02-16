@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Suno：プレイリスト一括ダウンロード（MP3）
-// @namespace    http://tampermonkey.net/
-// @version      1.4.2
-// @description  プレイリスト画面でMP3を一括DL。ファイル名は曲名（重複は(2)(3)…）。完了後、YouTube用タイムスタンプリスト(txt)＋Repeat開始時間を出力。UIはドラッグ移動可（位置保存）。
+// @namespace    https://github.com/monmonx2-cmd/Tampermonkey
+// @version      1.4.4
+// @description  プレイリスト画面でMP3を一括DL。ファイル名は曲名（重複は(2)(3)…）。完了後、YouTube用タイムスタンプリスト(txt)＋Repeat開始時間を出力（0.0秒表示）。UIはドラッグ移動可（位置保存）。
 // @updateURL    https://raw.githubusercontent.com/monmonx2-cmd/Tampermonkey/main/suno_playlist_bulk_dl.user.js
 // @downloadURL  https://raw.githubusercontent.com/monmonx2-cmd/Tampermonkey/main/suno_playlist_bulk_dl.user.js
 // @match        *://suno.com/*
@@ -12,7 +12,10 @@
 // @run-at       document-idle
 // @grant        GM_download
 // @grant        GM_xmlhttpRequest
-// @connect      *
+// @connect      suno.com
+// @connect      suno.ai
+// @connect      cdn1.suno.ai
+// @connect      cdn2.suno.ai
 // ==/UserScript==
 
 (function () {
@@ -21,6 +24,8 @@
   const PANEL_ID = 'suno-bulk-mp3-panel';
   const POS_KEY = 'suno_bulk_panel_pos_v1';
   const DEFAULT_DELAY_MS = 2000; // 安定優先：2秒固定
+  const DURATION_TIMEOUT_MS = 12000;
+
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   function isPlaylistPage() {
@@ -67,44 +72,51 @@
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
-  function formatTime(totalSec) {
-    const s = Math.max(0, Math.floor(totalSec));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const ss = s % 60;
+  // 0.1秒（小数1桁）表示：00:00.0 / 01:02:03.4
+  function formatTimeTenths(totalSec) {
+    const sec = Math.max(0, Number(totalSec) || 0);
+    const t = Math.round(sec * 10) / 10;
+    const whole = Math.floor(t);
+    const tenth = Math.round((t - whole) * 10);
+
+    const h = Math.floor(whole / 3600);
+    const m = Math.floor((whole % 3600) / 60);
+    const s = whole % 60;
 
     if (h > 0) {
-      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${tenth}`;
     }
-    return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${tenth}`;
   }
 
   function buildYoutubeTimestampText(entries) {
     const lines = [];
     lines.push('Track list:');
 
-    let t = 0;
+    let t = 0;            // 秒（小数）
     let unknown = false;
 
     for (const e of entries) {
       if (!e.ok) continue;
-      const timeStr = unknown ? '??:??' : formatTime(t);
+
+      const timeStr = unknown ? '??:??' : formatTimeTenths(t);
       lines.push(`${timeStr} ${e.title}`);
 
       if (!unknown && typeof e.durationSec === 'number' && isFinite(e.durationSec) && e.durationSec > 0) {
         t += e.durationSec;
+        t = Math.round(t * 10) / 10;
       } else {
         unknown = true;
       }
     }
 
-    const repeatStr = unknown ? '??:??' : formatTime(t);
+    const repeatStr = unknown ? '??:??' : formatTimeTenths(t);
     lines.push(`${repeatStr} Repeat`);
 
     return lines.join('\n');
   }
 
-  // ---------- 再生時間取得 ----------
+  // ---------- 通信（MP3を1回だけ取得） ----------
   function fetchArrayBuffer(url) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
@@ -122,24 +134,97 @@
     });
   }
 
-  async function getMp3DurationSeconds(mp3Url) {
+  function roundTenths(x) {
+    const n = Number(x);
+    if (!isFinite(n) || n <= 0) return null;
+    return Math.round(n * 10) / 10;
+  }
+
+  // ★新：Blobから <audio> のメタデータで duration を取る（decodeAudioDataより失敗しにくい）
+  function getDurationFromBlob(blob) {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(blob);
+      const audio = document.createElement('audio');
+      audio.preload = 'metadata';
+
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        try { clearTimeout(timer); } catch {}
+        try {
+          audio.removeAttribute('src');
+          audio.load();
+        } catch {}
+        try { URL.revokeObjectURL(url); } catch {}
+        resolve(val);
+      };
+
+      const timer = setTimeout(() => finish(null), DURATION_TIMEOUT_MS);
+
+      const tryRead = () => {
+        const d = roundTenths(audio.duration);
+        if (d) finish(d);
+      };
+
+      audio.addEventListener('loadedmetadata', tryRead);
+      audio.addEventListener('durationchange', tryRead);
+      audio.addEventListener('error', () => finish(null));
+
+      audio.src = url;
+    });
+  }
+
+  // フォールバック（必要時のみ）
+  async function getDurationFromArrayBuffer(audioCtx, ab) {
     try {
-      const ab = await fetchArrayBuffer(mp3Url);
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return null;
-
-      const ctx = new AudioCtx();
-      const audioBuffer = await ctx.decodeAudioData(ab.slice(0));
-      await ctx.close();
-
-      const sec = Math.round(audioBuffer.duration);
-      return (sec > 0 ? sec : null);
+      if (!audioCtx) return null;
+      const audioBuffer = await audioCtx.decodeAudioData(ab.slice(0));
+      return roundTenths(audioBuffer.duration);
     } catch {
       return null;
     }
   }
 
-  // ---------- NextData ----------
+  function gmDownloadBlob(blob, filename) {
+    const blobUrl = URL.createObjectURL(blob);
+
+    const fallbackAnchor = () => {
+      try {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+        return true;
+      } catch {
+        try { URL.revokeObjectURL(blobUrl); } catch {}
+        return false;
+      }
+    };
+
+    if (typeof GM_download !== 'function') {
+      return Promise.resolve({ ok: fallbackAnchor() });
+    }
+
+    return new Promise((resolve) => {
+      GM_download({
+        url: blobUrl,
+        name: filename,
+        saveAs: false,
+        onload: () => {
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+          resolve({ ok: true });
+        },
+        onerror: () => resolve({ ok: fallbackAnchor() }),
+        ontimeout: () => resolve({ ok: fallbackAnchor() }),
+      });
+    });
+  }
+
+  // ---------- Next.js埋め込みデータから音源URLを拾う ----------
   function tryGetNextDataJson() {
     try {
       const el = document.getElementById('__NEXT_DATA__');
@@ -186,7 +271,7 @@
     return results;
   }
 
-  // ---------- DOM保険 ----------
+  // ---------- DOMから曲行を集める（保険） ----------
   function getSongRows() {
     const a = Array.from(document.querySelectorAll('[data-testid="song-row"]'));
     if (a.length) return a;
@@ -249,20 +334,7 @@
     return Array.from(seen.values());
   }
 
-  // ---------- DL ----------
-  function gmDownload(url, filename) {
-    return new Promise((resolve) => {
-      GM_download({
-        url,
-        name: filename,
-        saveAs: false,
-        onload: () => resolve({ ok: true }),
-        onerror: () => resolve({ ok: false }),
-        ontimeout: () => resolve({ ok: false }),
-      });
-    });
-  }
-
+  // ---------- メイン ----------
   async function downloadAll(setStatus, stopRef, startBtn) {
     if (!isPlaylistPage()) {
       setStatus('プレイリスト画面で実行してください。');
@@ -285,6 +357,11 @@
 
     setStatus(`取得：${tracks.length}曲。ダウンロード開始…`);
 
+    // フォールバック用 AudioContext（必要時のみ使う）
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = AudioCtx ? new AudioCtx() : null;
+    if (audioCtx) { try { await audioCtx.resume(); } catch {} }
+
     let okCount = 0;
     let ngCount = 0;
 
@@ -305,16 +382,36 @@
 
       setStatus(`(${i + 1}/${tracks.length}) 保存中…\n${filename}`);
 
-      const durationSec = await getMp3DurationSeconds(t.mp3Url);
-      const res = await gmDownload(t.mp3Url, filename);
+      let durationSec = null;
+      let saveOk = false;
 
-      if (res.ok) okCount++;
+      try {
+        // ★二重DL解消：MP3を1回だけ取得
+        const ab = await fetchArrayBuffer(t.mp3Url);
+        const blob = new Blob([ab], { type: 'audio/mpeg' });
+
+        // duration（Blob→metadataが最優先）
+        durationSec = await getDurationFromBlob(blob);
+        if (!durationSec) {
+          durationSec = await getDurationFromArrayBuffer(audioCtx, ab);
+        }
+
+        // 保存（同じBlob）
+        const res = await gmDownloadBlob(blob, filename);
+        saveOk = !!res.ok;
+      } catch {
+        saveOk = false;
+      }
+
+      if (saveOk) okCount++;
       else ngCount++;
 
-      entries.push({ title: titleForList, ok: res.ok, durationSec });
+      entries.push({ title: titleForList, ok: saveOk, durationSec });
 
       await sleep(DEFAULT_DELAY_MS);
     }
+
+    if (audioCtx) { try { await audioCtx.close(); } catch {} }
 
     const doneText = stopRef.stop
       ? `停止しました。\n成功:${okCount} 失敗:${ngCount}`
@@ -347,7 +444,7 @@
     if (startBtn) startBtn.classList.add('sbPulse');
   }
 
-  // ---------- 位置保存 ----------
+  // ---------- UI位置保存 ----------
   function loadPanelPos() {
     try {
       const raw = localStorage.getItem(POS_KEY);
