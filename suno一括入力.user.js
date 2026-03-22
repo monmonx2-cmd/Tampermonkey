@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Suno 自動入力ヘルパー
 // @namespace    https://suno.com/
-// @version      1.1.2
+// @version      1.1.1
 // @description  ChatGPT で作った Suno 用プロンプトを解析し、Suno のカスタム作成欄へ自動入力します。必要なら生成まで実行します。
 // @match        https://suno.com/*
 // @grant        none
@@ -20,6 +20,7 @@
   const STATUS_ID = 'tm-suno-autofill-status';
   const INPUT_ID = 'tm-suno-autofill-input';
   const STORAGE_KEY = 'tm-suno-autofill-panel-pos-v1';
+  const PANEL_MINIMIZED_KEY = 'tm-suno-autofill-panel-minimized-v1';
   const POLL_INTERVAL_MS = 1000;
   const MAX_FIELD_SEARCH_DEPTH = 5;
   const FIELD_TYPES = ['textarea', 'input', 'select', '[contenteditable="true"]', '[role="textbox"]', '[role="combobox"]', '[aria-autocomplete]'];
@@ -1507,6 +1508,16 @@
     });
   }
 
+  function setPanelMinimized(panel, body, minimized) {
+    if (!panel || !body) return;
+    body.style.display = minimized ? 'none' : '';
+    panel.style.width = minimized ? 'auto' : '340px';
+    panel.style.minWidth = minimized ? '0' : '340px';
+    panel.style.paddingBottom = minimized ? '10px' : '10px';
+    panel.dataset.minimized = minimized ? 'true' : 'false';
+    localStorage.setItem(PANEL_MINIMIZED_KEY, minimized ? '1' : '0');
+  }
+
   function buildPanel() {
     if (document.getElementById(PANEL_ID)) return;
 
@@ -1543,11 +1554,18 @@
 
     const header = document.createElement('div');
     header.textContent = 'Suno 自動入力';
+    header.title = 'ダブルクリックで最小化 / 復元';
     Object.assign(header.style, {
       cursor: 'move',
       fontWeight: '700',
-      marginBottom: '8px',
-      userSelect: 'none'
+      marginBottom: '0',
+      userSelect: 'none',
+      whiteSpace: 'nowrap'
+    });
+
+    const body = document.createElement('div');
+    Object.assign(body.style, {
+      marginTop: '8px'
     });
 
     const textarea = document.createElement('textarea');
@@ -1605,8 +1623,15 @@
       lineHeight: '1.45'
     });
 
-    panel.append(header, textarea, buttonRow, status);
+    body.append(textarea, buttonRow, status);
+    panel.append(header, body);
     document.body.appendChild(panel);
+
+    const minimized = localStorage.getItem(PANEL_MINIMIZED_KEY) === '1';
+    setPanelMinimized(panel, body, minimized);
+    header.addEventListener('dblclick', () => {
+      setPanelMinimized(panel, body, panel.dataset.minimized !== 'true');
+    });
     makePanelDraggable(panel, header);
   }
 
