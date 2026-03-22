@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Suno 自動入力ヘルパー
 // @namespace    https://suno.com/
-// @version      1.1.1
+// @version      1.1.2
 // @description  ChatGPT で作った Suno 用プロンプトを解析し、Suno のカスタム作成欄へ自動入力します。必要なら生成まで実行します。
 // @match        https://suno.com/*
 // @grant        none
