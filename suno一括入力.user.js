@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Suno 自動入力ヘルパー
 // @namespace    https://suno.com/
-// @version      1.1.1
+// @version      1.1.4
 // @description  ChatGPT で作った Suno 用プロンプトを解析し、Suno のカスタム作成欄へ自動入力します。必要なら生成まで実行します。
-// @match        https://suno.com/*
+// @match        https://suno.com/create*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -11,7 +11,7 @@
 // 配布して自動更新も使いたい場合は、配布用 metadata に設定する URL 例です。
 // @downloadURL  https://raw.githubusercontent.com/monmonx2-cmd/Tampermonkey/main/suno一括入力.user.js
 // @updateURL    https://raw.githubusercontent.com/monmonx2-cmd/Tampermonkey/main/suno一括入力.user.js
-// そのうえで更新のたびに @version を上げると、利用者側の Tampermonkey が自動更新を検知できます。
+// そのうえで修正のたびに @version を上げると、利用者側の Tampermonkey が自動更新を検知できます。
 
 (function () {
   'use strict';
@@ -1508,13 +1508,24 @@
     });
   }
 
-  function setPanelMinimized(panel, body, minimized) {
-    if (!panel || !body) return;
+  function setPanelMinimized(panel, title, toggleButton, body, minimized) {
+    if (!panel || !title || !toggleButton || !body) return;
     body.style.display = minimized ? 'none' : '';
-    panel.style.width = minimized ? 'auto' : '340px';
-    panel.style.minWidth = minimized ? '0' : '340px';
-    panel.style.paddingBottom = minimized ? '10px' : '10px';
+    toggleButton.style.display = minimized ? 'none' : 'inline-flex';
     panel.dataset.minimized = minimized ? 'true' : 'false';
+
+    if (minimized) {
+      const titleWidth = Math.ceil(title.scrollWidth || title.getBoundingClientRect().width || 0);
+      const collapsedWidth = Math.max(120, titleWidth + 24);
+      panel.style.width = `${collapsedWidth}px`;
+      panel.style.minWidth = `${collapsedWidth}px`;
+      panel.style.padding = '10px 12px';
+    } else {
+      panel.style.width = '340px';
+      panel.style.minWidth = '340px';
+      panel.style.padding = '10px';
+    }
+
     localStorage.setItem(PANEL_MINIMIZED_KEY, minimized ? '1' : '0');
   }
 
@@ -1535,7 +1546,9 @@
       borderRadius: '12px',
       boxShadow: '0 12px 30px rgba(0,0,0,0.35)',
       padding: '10px',
-      fontFamily: 'ui-sans-serif, system-ui, sans-serif'
+      fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+      boxSizing: 'border-box',
+      overflow: 'hidden'
     });
 
     const savedPos = localStorage.getItem(STORAGE_KEY);
@@ -1553,15 +1566,46 @@
     }
 
     const header = document.createElement('div');
-    header.textContent = 'Suno 自動入力';
-    header.title = 'ダブルクリックで最小化 / 復元';
     Object.assign(header.style, {
       cursor: 'move',
       fontWeight: '700',
       marginBottom: '0',
       userSelect: 'none',
-      whiteSpace: 'nowrap'
+      whiteSpace: 'nowrap',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: '8px'
     });
+
+    const title = document.createElement('span');
+    title.textContent = 'Suno 自動入力';
+    title.title = '最小化中はここをクリックで復元';
+    Object.assign(title.style, {
+      display: 'inline-block',
+      flex: '0 0 auto'
+    });
+
+    const toggleButton = document.createElement('button');
+    toggleButton.type = 'button';
+    toggleButton.textContent = '−';
+    toggleButton.title = '最小化';
+    Object.assign(toggleButton.style, {
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: '22px',
+      height: '22px',
+      borderRadius: '999px',
+      border: '1px solid rgba(255,255,255,0.18)',
+      background: 'rgba(255,255,255,0.08)',
+      color: '#fff',
+      cursor: 'pointer',
+      padding: '0',
+      lineHeight: '1'
+    });
+
+    header.append(title, toggleButton);
 
     const body = document.createElement('div');
     Object.assign(body.style, {
@@ -1628,22 +1672,34 @@
     document.body.appendChild(panel);
 
     const minimized = localStorage.getItem(PANEL_MINIMIZED_KEY) === '1';
-    setPanelMinimized(panel, body, minimized);
-    header.addEventListener('dblclick', () => {
-      setPanelMinimized(panel, body, panel.dataset.minimized !== 'true');
+    setPanelMinimized(panel, title, toggleButton, body, minimized);
+    toggleButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      setPanelMinimized(panel, title, toggleButton, body, true);
+    });
+    title.addEventListener('click', () => {
+      if (panel.dataset.minimized === 'true') {
+        setPanelMinimized(panel, title, toggleButton, body, false);
+      }
     });
     makePanelDraggable(panel, header);
   }
 
   function isCreateLikePage() {
-    const text = normalizedNodeText(document.body);
-    return /custom|lyrics|styles|create|generate/i.test(text);
+    return window.location.pathname.startsWith('/create');
+  }
+
+  function removePanel() {
+    document.getElementById(PANEL_ID)?.remove();
   }
 
   function ensurePanel() {
     if (!document.body) return;
-    if (document.getElementById(PANEL_ID)) return;
-    if (isCreateLikePage()) buildPanel();
+    if (!isCreateLikePage()) {
+      removePanel();
+      return;
+    }
+    if (!document.getElementById(PANEL_ID)) buildPanel();
   }
 
   function startObserver() {
