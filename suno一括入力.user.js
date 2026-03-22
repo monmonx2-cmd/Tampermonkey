@@ -1110,14 +1110,16 @@
     if (!el || !(el instanceof HTMLElement) || isDisabledButton(el)) return false;
     el.scrollIntoView?.({ block: 'center', inline: 'center' });
     el.focus?.();
-    const rect = el.getBoundingClientRect();
-    let clicked = clickElement(el);
-    if (rect.width > 0 && rect.height > 0) {
-      clicked = clickAtPosition(el, 0.5, 0.5) || clicked;
+
+    if (el.matches('button, input, a')) {
+      return clickElement(el);
     }
-    dispatchKeyboardStep(el, 'Enter', 1);
-    dispatchKeyboardStep(el, ' ', 1);
-    return clicked;
+
+    if (el.matches('[role="button"], div, span')) {
+      return clickAtPosition(el, 0.5, 0.5);
+    }
+
+    return clickElement(el);
   }
 
   function hasVisibleAdvancedFields() {
@@ -1642,4 +1644,3 @@
     init();
   }
 })();
-
