@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Suno 自動入力ヘルパー
 // @namespace    https://suno.com/
-// @version      1.1.7
+// @version      1.1.8
 // @description  ChatGPT で作った Suno 用プロンプトを解析し、Suno のカスタム作成欄へ自動入力します。必要なら生成まで実行します。
 // @match        https://suno.com/create*
 // @grant        none
@@ -874,13 +874,17 @@
       view: window
     });
 
+    const movePoints = Array.from({ length: 8 }, (_, i) => startX + ((endX - startX) * (i + 1)) / 8);
+
     slider.focus?.();
     try {
       slider.dispatchEvent(new PointerEvent('pointerover', pointerPayload(startX)));
       slider.dispatchEvent(new PointerEvent('pointerenter', pointerPayload(startX)));
       slider.dispatchEvent(new PointerEvent('pointerdown', pointerPayload(startX)));
-      slider.dispatchEvent(new PointerEvent('pointermove', pointerPayload(endX)));
-      document.dispatchEvent(new PointerEvent('pointermove', pointerPayload(endX)));
+      movePoints.forEach((x) => {
+        slider.dispatchEvent(new PointerEvent('pointermove', pointerPayload(x)));
+        document.dispatchEvent(new PointerEvent('pointermove', pointerPayload(x)));
+      });
       slider.dispatchEvent(new PointerEvent('pointerup', { ...pointerPayload(endX), buttons: 0 }));
     } catch (_error) {
       // ignore PointerEvent unsupported cases
@@ -889,8 +893,10 @@
     slider.dispatchEvent(new MouseEvent('mouseover', mousePayload(startX)));
     slider.dispatchEvent(new MouseEvent('mouseenter', mousePayload(startX)));
     slider.dispatchEvent(new MouseEvent('mousedown', mousePayload(startX)));
-    slider.dispatchEvent(new MouseEvent('mousemove', mousePayload(endX)));
-    document.dispatchEvent(new MouseEvent('mousemove', mousePayload(endX)));
+    movePoints.forEach((x) => {
+      slider.dispatchEvent(new MouseEvent('mousemove', mousePayload(x)));
+      document.dispatchEvent(new MouseEvent('mousemove', mousePayload(x)));
+    });
     slider.dispatchEvent(new MouseEvent('mouseup', { ...mousePayload(endX), buttons: 0 }));
     slider.dispatchEvent(new MouseEvent('click', { ...mousePayload(endX), buttons: 0 }));
     return true;
@@ -935,6 +941,7 @@
         const arrowSteps = Math.abs(Number(numeric) - (current + (delta > 0 ? pageSteps * 10 : -pageSteps * 10)));
         if (arrowSteps > 0) moved = dispatchKeyboardStep(el, delta > 0 ? 'ArrowRight' : 'ArrowLeft', Math.min(arrowSteps, 12)) || moved;
       }
+      moved = clickAtPosition(el, Math.max(0.02, Math.min(0.98, Number(numeric) / 100)), 0.5) || moved;
       moved = dragSliderToPercent(el, numeric) || moved;
       moved = clickSliderRowByPercent(el, numeric) || moved;
       if (moved) {
