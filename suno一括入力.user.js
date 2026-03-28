@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Suno 自動入力ヘルパー
 // @namespace    https://suno.com/
-// @version      1.1.6
+// @version      1.1.7
 // @description  ChatGPT で作った Suno 用プロンプトを解析し、Suno のカスタム作成欄へ自動入力します。必要なら生成まで実行します。
 // @match        https://suno.com/create*
 // @grant        none
@@ -1104,20 +1104,51 @@
     return ranked[0]?.el || null;
   }
 
-  function triggerActionButton(el) {
+  function captureActionState(el) {
+    if (!el || !(el instanceof HTMLElement)) return { disabled: true, label: '', busy: false };
+    const label = getActionLabels(el);
+    const busy = (el.getAttribute('aria-busy') || '').toLowerCase() === 'true'
+      || /loading|creating|generating/.test(`${el.className || ''}`.toLowerCase());
+    return { disabled: isDisabledButton(el), label, busy };
+  }
+
+  function looksTriggered(before, after) {
+    if (!before || !after) return false;
+    if (!before.busy && after.busy) return true;
+    if (!before.disabled && after.disabled) return true;
+    if (before.label !== after.label) return true;
+    return false;
+  }
+
+  async function triggerActionButton(el) {
     if (!el || !(el instanceof HTMLElement) || isDisabledButton(el)) return false;
     el.scrollIntoView?.({ block: 'center', inline: 'center' });
     el.focus?.();
 
+    const before = captureActionState(el);
+
     if (el.matches('button, input, a')) {
-      return clickElement(el);
+      clickElement(el);
+    } else if (el.matches('[role="button"], div, span')) {
+      clickAtPosition(el, 0.5, 0.5);
+    } else {
+      clickElement(el);
     }
 
-    if (el.matches('[role="button"], div, span')) {
-      return clickAtPosition(el, 0.5, 0.5);
+    await sleep(140);
+    const afterPrimary = captureActionState(el);
+    if (looksTriggered(before, afterPrimary)) return true;
+
+    const form = el.closest('form');
+    if (form) {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await sleep(140);
+      if (looksTriggered(afterPrimary, captureActionState(el))) return true;
     }
 
-    return clickElement(el);
+    dispatchKeyboardStep(el, 'Enter', 1);
+    await sleep(140);
+    return looksTriggered(afterPrimary, captureActionState(el));
   }
 
   function hasVisibleAdvancedFields() {
@@ -1464,8 +1495,9 @@
       if (doGenerate) {
         const button = findGenerateButton() || findButtonLike(GENERATE_LABELS);
         if (button && !isDisabledButton(button)) {
-          triggerActionButton(button);
+          const generated = await triggerActionButton(button);
           status.push(`生成ボタンを実行: ${getActionLabels(button).slice(0, 80) || describeElement(button)}`);
+          if (!generated) status.push('警告: クリック後の状態変化を検出できませんでした（Suno v5.5 UI変更の可能性）。');
         } else if (button) {
           status.push('警告: 生成ボタン候補は見つかりましたが、無効状態でした。');
         } else {
